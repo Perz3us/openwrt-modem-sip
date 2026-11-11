@@ -21,6 +21,10 @@ Every phone gets its own login, made on the router, with a QR code for Linphone.
 call rings all phones at once and the first one to answer gets it. You can call out from any
 phone, and keypad tones work for bank and carrier menus.
 
+Texts sent from a phone's chat go out as SMS from the SIM. Long texts are split into parts that
+the other phone joins back together, and anything outside the GSM alphabet, like Sinhala or
+emoji, is sent as Unicode. The app shows the text as delivered once the network has taken it.
+
 When HD calling is on, calls use Opus or G.722, otherwise PCMA or PCMU. The call history on the
 phone port says which phone answered, like Answered on Pixel, and call recording works through
 the phone port with nothing extra to set up. Five wrong logins block that address for 10
@@ -57,6 +61,10 @@ The phone shows as online once it has logged in. Ports and HD are on the Setting
 
 `logread -e msipd` shows logins, blocked addresses and the codec each call used. If a call fails
 because there was no audio format in common, the log line shows what the app offered.
+
+A text that fails shows as not delivered in the app, and the log says why, with the modem's
+error such as `+CMS ERROR: 500`. Sending SMS needs the modem AT port itself, so it doesn't work
+while the QModem at-daemon or ModemManager holds the modem.
 
 ## Build
 

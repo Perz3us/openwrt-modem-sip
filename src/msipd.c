@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <time.h>
 #include <re.h>
 #include <uci.h>
 #include "audio.h"
@@ -15,6 +16,7 @@
 #include "modem.h"
 #include "phones.h"
 #include "sip.h"
+#include "sms.h"
 
 #define MSIPD_VERSION	"0.1.0"
 #define POLL_MS		500
@@ -149,9 +151,42 @@ static int is_busy(void)
 	return call.st != C_IDLE && call.st != C_OFF;
 }
 
+static int on_sms(const char *name, const char *number, const char *text, size_t n)
+{
+	static struct sms_pdu pdu[SMS_PARTS_MAX];
+	static unsigned char ref;
+	char r[256];
+	int parts, i, rc;
+
+	if (!ref)
+		ref = time(NULL);
+	if ((parts = sms_encode(number, text, n, ref++, pdu, SMS_PARTS_MAX)) < 0) {
+		if (parts == SMS_TOO_LONG)
+			syslog(LOG_WARNING, "%s: SMS not sent, longer than %d parts", name, SMS_PARTS_MAX);
+		else
+			syslog(LOG_WARNING, "%s: SMS not sent, %s", name,
+			       parts == SMS_BAD_NUMBER ? "not a phone number" : "the text is empty or not UTF-8");
+		return parts;
+	}
+	for (i = 0; i < parts; i++) {
+		if ((rc = modem_sms(pdu[i].hex, pdu[i].len, r, sizeof(r)))) {
+			r[strcspn(r, "\r\n")] = 0;
+			if (rc == -2)
+				syslog(LOG_WARNING, "%s: SMS not sent, it needs the modem AT port and that is held by "
+				       "the QModem at-daemon or ModemManager", name);
+			else
+				syslog(LOG_WARNING, "%s: SMS not sent, part %d of %d failed (%s)", name, i + 1, parts,
+				       *r ? r : "no answer from the modem");
+			return rc == -2 ? SMS_NO_PORT : SMS_FAILED;
+		}
+	}
+	syslog(LOG_INFO, "%s sent an SMS in %d part%s", name, parts, parts > 1 ? "s" : "");
+	return SMS_OK;
+}
+
 static const struct sip_cb sip_cbs = {
 	.answered = on_answered, .dial = on_dial, .hangup = on_hangup,
-	.digit = on_digit, .busy = is_busy, .hd = hd_on,
+	.digit = on_digit, .busy = is_busy, .hd = hd_on, .sms = on_sms,
 };
 
 int ctl_dial(const char *number)

@@ -41,3 +41,17 @@ int modem_at(const char *cmd, char *resp, size_t n)
 {
 	return modem_at_wait(cmd, resp, n, 3, NULL);
 }
+
+int modem_sms(const char *pdu, int len, char *resp, size_t n)
+{
+	char path[256];
+	FILE *f;
+
+	snprintf(path, sizeof(path), "%s/at.log", dir());
+	if ((f = fopen(path, "a"))) {
+		fprintf(f, "SMS %d %s\n", len, pdu);
+		fclose(f);
+	}
+	snprintf(resp, n, "+CMGS: 1\r\nOK\r\n");
+	return 0;
+}

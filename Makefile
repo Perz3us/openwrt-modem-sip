@@ -1,7 +1,7 @@
 CFLAGS ?= -O2
 override CFLAGS += -std=gnu11 -Wall -Wextra -Werror
 override CFLAGS += -I/usr/local/include/re -I$(STAGING_DIR)/usr/include/re
-CORE = build/msipd.o build/codec.o build/g722.o build/clcc.o build/phones.o build/call.o build/audio.o build/media.o build/sip.o build/bus.o
+CORE = build/msipd.o build/codec.o build/g722.o build/clcc.o build/phones.o build/call.o build/audio.o build/media.o build/sip.o build/bus.o build/sms.o
 OBJS = $(CORE) build/modem.o
 LIBS = -lre -lubus -lubox -luci -lopus -lm
 

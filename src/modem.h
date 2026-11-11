@@ -15,5 +15,6 @@ int modem_restart(void);
 void modem_heal(void);
 void modem_redial(void);
 int modem_data_up(void);
+int modem_sms(const char *pdu, int len, char *resp, size_t n);
 
 #endif

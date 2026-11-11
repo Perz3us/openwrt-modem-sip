@@ -3,6 +3,8 @@
 #ifndef SIP_H
 #define SIP_H
 
+#include <stddef.h>
+
 struct sip_cb {
 	void (*answered)(const char *name);
 	void (*dial)(const char *name, const char *number);
@@ -10,6 +12,7 @@ struct sip_cb {
 	void (*digit)(char d);
 	int (*busy)(void);
 	int (*hd)(void);
+	int (*sms)(const char *name, const char *number, const char *text, size_t n);
 };
 
 int sip_start(const char *bind_ip, int port, int rtp_from, int rtp_to, const struct sip_cb *cb);

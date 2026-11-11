@@ -7,6 +7,7 @@
 #include "media.h"
 #include "phones.h"
 #include "sip.h"
+#include "sms.h"
 
 #define REG_MAX 300
 
@@ -116,11 +117,68 @@ static void on_register(const struct sip_msg *msg)
 		   contact, exp, exp);
 }
 
+/* A text from a phone becomes an SMS from the SIM. The reply goes through a server transaction,
+ * so a resent request gets the same answer and no second SMS. */
+static void on_message(const struct sip_msg *msg)
+{
+	const struct phone *p = authenticate(msg, 1, "MESSAGE");
+	const struct sip_hdr *h;
+	const char *body = "", *text;
+	char number[40] = "";
+	size_t n = 0, tn;
+	int r;
+
+	if (!p)
+		return;
+	h = sip_msg_hdr(msg, SIP_HDR_CONTENT_TYPE);
+	if (msg->mb) {
+		body = (const char *)mbuf_buf(msg->mb);
+		n = mbuf_get_left(msg->mb);
+	}
+	r = h ? sms_body(h->val.p, h->val.l, body, n, &text, &tn) : -1;
+	if (r == 0) {
+		sip_treply(NULL, sip, msg, 200, "OK");
+		return;
+	}
+	if (r < 0) {
+		syslog(LOG_WARNING, "%s: a message of type %.*s can't go out as SMS", p->name,
+		       h ? (int)h->val.l : 4, h ? h->val.p : "none");
+		sip_treplyf(NULL, NULL, sip, msg, false, 415, "Unsupported Media Type",
+			    "Accept: text/plain, message/cpim\r\nContent-Length: 0\r\n\r\n");
+		return;
+	}
+	re_snprintf(number, sizeof(number), "%H", uri_user_unescape, &msg->uri.user);
+	switch (cb->sms(p->name, number, text, tn)) {
+	case SMS_OK:
+		sip_treply(NULL, sip, msg, 200, "OK");
+		break;
+	case SMS_BAD_NUMBER:
+		sip_treply(NULL, sip, msg, 404, "Not Found");
+		break;
+	case SMS_BAD_TEXT:
+		sip_treply(NULL, sip, msg, 400, "Bad Request");
+		break;
+	case SMS_TOO_LONG:
+		sip_treply(NULL, sip, msg, 513, "Message Too Large");
+		break;
+	case SMS_NO_PORT:
+		sip_treply(NULL, sip, msg, 503, "Service Unavailable");
+		break;
+	default:
+		sip_treply(NULL, sip, msg, 500, "SMS Not Sent");
+		break;
+	}
+}
+
 static bool on_request(const struct sip_msg *msg, void *arg)
 {
 	(void)arg;
 	if (!pl_strcmp(&msg->met, "REGISTER")) {
 		on_register(msg);
+		return true;
+	}
+	if (!pl_strcmp(&msg->met, "MESSAGE")) {
+		on_message(msg);
 		return true;
 	}
 	if (!pl_strcmp(&msg->met, "OPTIONS")) {
