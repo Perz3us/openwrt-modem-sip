@@ -36,6 +36,8 @@ test: build/codec.o build/g722.o
 	./build/test_call
 	$(CC) $(CFLAGS) -o build/test_audio tests/test_audio.c src/audio.c
 	./build/test_audio
+	$(CC) $(CFLAGS) -o build/test_sms tests/test_sms.c src/sms.c
+	./build/test_sms
 
 clean:
 	rm -rf build

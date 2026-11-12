@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: debian:bookworm
+    env:
+      SDK: openwrt-sdk-25.12.5-qualcommax-ipq807x_gcc-14.3.0_musl.Linux-x86_64
+    steps:
+      - run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential perl python3 python3-setuptools \
+            file rsync gawk unzip bzip2 xz-utils zstd bison flex libncurses-dev wget git ca-certificates \
+            swig gettext libelf-dev
+      - uses: actions/checkout@v6
+      - run: |
+          mkdir -p /cache
+          wget -q -O /tmp/sdk.tar.zst "https://downloads.openwrt.org/releases/25.12.5/targets/qualcommax/ipq807x/$SDK.tar.zst"
+          tar -C /cache --zstd -xf /tmp/sdk.tar.zst
+          ln -s "$GITHUB_WORKSPACE" /work
+          sh scripts/build_pkgs.sh
+          rm -f dist/libopus*.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: dist/*.apk
+
+  release:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: out
+      - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "$GITHUB_REF_NAME" --notes "" out/*.apk
