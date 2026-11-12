@@ -10,6 +10,7 @@ cp feeds.conf.msip feeds.conf
 ./scripts/feeds update -a >/dev/null
 ./scripts/feeds install libre libopus libubox ubus uci rpcd luci-base luci-lib-uqr >/dev/null 2>&1
 ./scripts/feeds install -p msip -a >/dev/null 2>&1 || true
+touch .config
 for p in modem-sip luci-app-modem-sip; do
 	sed -i "/CONFIG_PACKAGE_$p[= ]/d" .config
 	echo "CONFIG_PACKAGE_$p=m" >> .config
