@@ -1,0 +1,20 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: docker build -q -t msip-dev -f scripts/Dockerfile.dev scripts
+      - run: |
+          docker run --rm -v "$PWD:/w" -w /w msip-dev sh -c '
+            set -e
+            make test
+            make build/msipd-test
+            bash tests/test_scripts.sh
+            sh tests/test_sipp.sh'
