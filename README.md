@@ -51,7 +51,7 @@ install.
 
 ## Set up a phone
 
-Open Modem SIP under Services and press Turn on. If the phone port uses QModem voice, it asks
+Open Modem SIP under Services and press the Modem SIP: OFF button to turn it on. If the phone port uses QModem voice, it asks
 before switching. Type a name like `Pixel` and press Add phone. In Linphone, scan the phone's
 QR code. For other apps press Login and type the server, user name and password, with UDP.
 

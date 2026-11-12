@@ -330,7 +330,7 @@ return view.extend({
 		if (!isOn(svc))
 			return E('div', { 'class': 'cbi-section' }, [
 				E('p', {}, E('strong', _('Turned off'))),
-				E('button', { 'class': 'btn cbi-button-apply', 'click': ui.createHandlerFn(this, 'turnOn') }, _('Turn on'))
+				E('button', { 'class': 'btn cbi-button-negative', 'click': ui.createHandlerFn(this, 'turnOn') }, _('Modem SIP: OFF'))
 			]);
 
 		this.nameBox = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'maxlength': 23, 'placeholder': _('Name, like Pixel') });
@@ -347,7 +347,7 @@ return view.extend({
 				E('p', {}, [
 					E('strong', st.running ? _('Turned on') : _('Turned on, but msipd is not running')),
 					' ',
-					E('button', { 'class': 'btn cbi-button-reset', 'click': ui.createHandlerFn(this, 'turnOff') }, _('Turn off'))
+					E('button', { 'class': 'btn cbi-button-positive', 'click': ui.createHandlerFn(this, 'turnOff') }, _('Modem SIP: ON'))
 				])
 			]),
 			E('div', { 'class': 'cbi-section' }, [
