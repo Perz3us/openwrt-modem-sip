@@ -40,7 +40,10 @@ printf "config fxs 'main'\n\toption hd '0'\n" > $C/fxs
 ubusd >/dev/null 2>&1 &
 UBUSD=$!
 sleep 0.5
-./build/msipd-test -c $C -b 127.0.0.1 -s /tmp/msip-pcm.sock &
+old() { i=0; while [ $i -lt 40 ]; do printf '+CMGL: %d,1,,25\r\n00040A8170173254760008621131010000%02X06006F006C0064\r\n' $(($1 + i)) $((i + 16)); i=$((i + 1)); done; }
+old 100 > $MSIP_FAKE/cmgl
+rm -f /tmp/msip-sms-seen
+MSIP_SMS_SEEN=/tmp/msip-sms-seen MSIP_SMS_CHECK=1 ./build/msipd-test -c $C -b 127.0.0.1 -s /tmp/msip-pcm.sock &
 MSIPD=$!
 sleep 0.5
 
@@ -142,6 +145,17 @@ printf "config fxs 'main'
 ubus call fxs_sip digit '{"line":"phone","digit":"5"}' >/dev/null && wait_at 'AT+VTS="5"' && ok "ubus digit" || bad "ubus digit"
 ubus call fxs_sip digit '{"line":"phone","digit":"x"}' >/dev/null 2>&1 && bad "bad digit refused" || ok "bad digit refused"
 ubus call fxs_sip dial '{"line":"phone","number":"0771234567;ATH"}' >/dev/null 2>&1 && bad "bad number refused" || ok "bad number refused"
+
+: > $MSIP_FAKE/at.log
+sipp_run -sf $S/uac_sms.xml -p 5066 $PIXEL && ok "phone text gets 200" || bad "phone text gets 200"
+grep -q "^SMS " $MSIP_FAKE/at.log && ok "phone text goes out as SMS" || bad "phone text goes out as SMS"
+
+sipp 127.0.0.1:5060 -sf $S/uas_sms.xml -p 5062 -m 1 -nostdin -timeout 20 -timeout_error >/dev/null 2>&1 &
+A=$!
+sleep 0.5
+{ old 200; printf '+CMGL: 5,0,,45\r\n00040A8170173254760008621131010000002400680065006C006C006F002000660072006F006D0020007400680065002000530049004D\r\n'; } > $MSIP_FAKE/cmgl
+wait $A && ok "received SMS reaches the phone" || bad "received SMS reaches the phone"
+wait_at "AT+CMGD=5" && ok "delivered SMS is deleted" || bad "delivered SMS is deleted"
 
 kill -0 $MSIPD && ok "msipd still running" || bad "msipd still running"
 kill $MSIPD $UBUSD 2>/dev/null

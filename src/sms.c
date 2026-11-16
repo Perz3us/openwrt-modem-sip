@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <strings.h>
@@ -278,4 +281,221 @@ int sms_body(const char *ctype, size_t ctn, const char *body, size_t n, const ch
 		}
 	}
 	return -1;
+}
+
+static size_t utf8_put(char *out, size_t at, size_t max, uint32_t cp)
+{
+	int k = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4, i;
+
+	if (at + k >= max)
+		return at;
+	if (k == 1) {
+		out[at++] = cp;
+	} else {
+		out[at++] = (0xf00 >> k) | (cp >> (6 * (k - 1)));
+		for (i = k - 2; i >= 0; i--)
+			out[at++] = 0x80 | ((cp >> (6 * i)) & 0x3f);
+	}
+	out[at] = 0;
+	return at;
+}
+
+static int septet(const uint8_t *b, size_t n, int bit)
+{
+	size_t by = bit / 8;
+	int sh = bit % 8, v;
+
+	if (by >= n)
+		return -1;
+	v = b[by] >> sh;
+	if (sh > 1 && by + 1 < n)
+		v |= b[by + 1] << (8 - sh);
+	return v & 0x7f;
+}
+
+static void gsm7_text(const uint8_t *b, size_t n, int bit, int count, char *out, size_t max)
+{
+	size_t at = 0, e;
+	uint32_t cp;
+	int i, v;
+
+	out[0] = 0;
+	for (i = 0; i < count; i++) {
+		if ((v = septet(b, n, bit + 7 * i)) < 0)
+			break;
+		cp = gsm7[v];
+		if (v == ESC) {
+			if (++i >= count || (v = septet(b, n, bit + 7 * i)) < 0)
+				break;
+			cp = ' ';
+			for (e = 0; e < sizeof(gsm7_ext) / sizeof(gsm7_ext[0]); e++)
+				if (gsm7_ext[e].s == v)
+					cp = gsm7_ext[e].cp;
+		}
+		at = utf8_put(out, at, max, cp);
+	}
+}
+
+static int hexv(char c)
+{
+	return c >= '0' && c <= '9' ? c - '0' : c >= 'A' && c <= 'F' ? c - 'A' + 10 :
+	       c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+int sms_decode(const char *hex, size_t hn, struct sms_in *o)
+{
+	uint8_t b[200];
+	const uint8_t *ud;
+	size_t n, un, k, t = 0;
+	int at, fo, ol, toa, dcs, udl, udhl = 0, alpha = 0, i, skip;
+	uint32_t u, l;
+	char *d;
+
+	memset(o, 0, sizeof(*o));
+	o->total = o->seq = 1;
+	if (hn % 2 || hn / 2 > sizeof(b) || hn < 2)
+		return -1;
+	for (n = 0; n < hn / 2; n++) {
+		if (hexv(hex[2 * n]) < 0 || hexv(hex[2 * n + 1]) < 0)
+			return -1;
+		b[n] = hexv(hex[2 * n]) << 4 | hexv(hex[2 * n + 1]);
+	}
+	at = 1 + b[0];
+	if ((size_t)at + 3 > n)
+		return -1;
+	fo = b[at++];
+	if (fo & 3)
+		return -1;
+	ol = b[at++];
+	toa = b[at++];
+	if ((size_t)(at + (ol + 1) / 2 + 10) > n)
+		return -1;
+	if ((toa & 0x70) == 0x50) {
+		gsm7_text(b + at, (ol + 1) / 2, 0, ol * 4 / 7, o->number, sizeof(o->number));
+	} else {
+		d = o->number;
+		if ((toa & 0x70) == 0x10)
+			*d++ = '+';
+		for (i = 0; i < ol && d < o->number + sizeof(o->number) - 1; i++) {
+			int v = (b[at + i / 2] >> (i % 2 ? 4 : 0)) & 0xf;
+
+			if (v > 9)
+				break;
+			*d++ = '0' + v;
+		}
+		*d = 0;
+	}
+	at += (ol + 1) / 2 + 1;
+	dcs = b[at++];
+	for (i = 0; i < 7; i++)
+		sprintf(o->ts + 2 * i, "%02X", b[at + i]);
+	at += 7;
+	udl = b[at++];
+	if ((dcs & 0xc0) == 0 || (dcs & 0xc0) == 0x40)
+		alpha = (dcs >> 2) & 3;
+	else if ((dcs & 0xf0) == 0xf0)
+		alpha = dcs & 4 ? 1 : 0;
+	else if ((dcs & 0xf0) == 0xe0)
+		alpha = 2;
+	ud = b + at;
+	un = n - at;
+	if (fo & 0x40) {
+		if (!un || (size_t)(udhl = ud[0]) + 1 > un)
+			return -1;
+		for (i = 1; i + 1 <= udhl; i += 2 + ud[i + 1]) {
+			if (ud[i] == 0 && ud[i + 1] == 3 && i + 4 <= udhl) {
+				o->ref = ud[i + 2];
+				o->total = ud[i + 3];
+				o->seq = ud[i + 4];
+			} else if (ud[i] == 8 && ud[i + 1] == 4 && i + 5 <= udhl) {
+				o->ref = ud[i + 2] << 8 | ud[i + 3];
+				o->total = ud[i + 4];
+				o->seq = ud[i + 5];
+			}
+		}
+	}
+	if (alpha == 0) {
+		skip = fo & 0x40 ? ((udhl + 1) * 8 + 6) / 7 : 0;
+		gsm7_text(ud, un, skip * 7, udl - skip, o->text, sizeof(o->text));
+	} else if (alpha == 2) {
+		size_t e = (size_t)udl < un ? (size_t)udl : un;
+
+		for (k = fo & 0x40 ? (size_t)udhl + 1 : 0; k + 1 < e; k += 2) {
+			u = ud[k] << 8 | ud[k + 1];
+			if (u >= 0xd800 && u < 0xdc00 && k + 3 < e) {
+				l = ud[k + 2] << 8 | ud[k + 3];
+				if (l >= 0xdc00 && l < 0xe000) {
+					u = 0x10000 + ((u - 0xd800) << 10) + (l - 0xdc00);
+					k += 2;
+				}
+			}
+			t = utf8_put(o->text, t, sizeof(o->text), u);
+		}
+	} else {
+		snprintf(o->text, sizeof(o->text), "[a data message that can't be shown]");
+	}
+	if (o->total < 1 || o->seq < 1 || o->seq > o->total)
+		o->total = o->seq = 1;
+	return 0;
+}
+
+int sms_cmgl_next(const char **p, int *index, const char **pdu, size_t *len)
+{
+	const char *q = strstr(*p, "+CMGL:");
+
+	if (!q)
+		return 0;
+	*index = atoi(q + 6);
+	q += strcspn(q, "\r\n");
+	q += strspn(q, "\r\n");
+	*pdu = q;
+	*len = strspn(q, "0123456789ABCDEFabcdef");
+	*p = q + *len;
+	return 1;
+}
+
+int sms_mm_list(const char *out, int *ids, int max)
+{
+	const char *p = out, *eol;
+	int n = 0;
+
+	while (n < max && (p = strstr(p, "/SMS/"))) {
+		eol = p + strcspn(p, "\n");
+		if (memmem(p, eol - p, "(received)", 10))
+			ids[n++] = atoi(p + 5);
+		p = eol;
+	}
+	return n;
+}
+
+static void kv(const char *out, const char *key, char *val, size_t n)
+{
+	const char *p = strstr(out, key), *v, *end, *nl;
+
+	val[0] = 0;
+	if (!p || !(v = strchr(p, ':')))
+		return;
+	for (v++; *v == ' '; v++)
+		;
+	for (end = v; (nl = strchr(end, '\n')) && nl[1] && strncmp(nl + 1, "sms.", 4); end = nl + 1)
+		;
+	if (!nl)
+		end += strlen(end);
+	else
+		end = nl;
+	while (end > v && (end[-1] == '\r' || end[-1] == ' '))
+		end--;
+	if (end - v == 2 && !strncmp(v, "--", 2))
+		return;
+	snprintf(val, n, "%.*s", (int)(end - v), v);
+}
+
+int sms_mm_read(const char *out, struct sms_in *in)
+{
+	memset(in, 0, sizeof(*in));
+	in->total = in->seq = 1;
+	kv(out, "sms.content.number", in->number, sizeof(in->number));
+	kv(out, "sms.content.text", in->text, sizeof(in->text));
+	kv(out, "sms.properties.timestamp", in->ts, sizeof(in->ts));
+	return in->number[0] ? 0 : -1;
 }

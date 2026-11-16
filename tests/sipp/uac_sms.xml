@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<scenario name="uac sms">
+<send retrans="500"><![CDATA[
+MESSAGE sip:0771234567@[remote_ip] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+From: <sip:[service]@[remote_ip]>;tag=[call_number]
+To: <sip:0771234567@[remote_ip]>
+Call-ID: [call_id]
+Max-Forwards: 70
+CSeq: 1 MESSAGE
+Content-Type: text/plain;charset=UTF-8
+Content-Length: [len]
+
+hello
+]]></send>
+<recv response="407" auth="true"/>
+<send retrans="500"><![CDATA[
+MESSAGE sip:0771234567@[remote_ip] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+From: <sip:[service]@[remote_ip]>;tag=[call_number]
+To: <sip:0771234567@[remote_ip]>
+Call-ID: [call_id]
+Max-Forwards: 70
+CSeq: 2 MESSAGE
+[authentication]
+Content-Type: text/plain;charset=UTF-8
+Content-Length: [len]
+
+hello
+]]></send>
+<recv response="200" timeout="5000"/>
+</scenario>

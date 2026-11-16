@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2026 perz3us
+#include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
 #include <time.h>
@@ -117,8 +118,126 @@ static void on_register(const struct sip_msg *msg)
 		   contact, exp, exp);
 }
 
-/* A text from a phone becomes an SMS from the SIM. The reply goes through a server transaction,
- * so a resent request gets the same answer and no second SMS. */
+#define OUTQ	8
+#define INQ	16
+
+static struct {
+	unsigned id;
+	struct sip_strans *st;
+	struct sip_msg *msg;
+} outq[OUTQ];
+static unsigned next_id;
+
+static struct {
+	char key[96];
+	char number[32];
+	char *text;
+	size_t n;
+	int pending;
+} inq[INQ];
+
+struct mctx {
+	char key[96];
+};
+
+void sip_sms_result(unsigned id, int code)
+{
+	static const struct { int code; uint16_t scode; const char *reason; } map[] = {
+		{ SMS_OK, 200, "OK" }, { SMS_BAD_NUMBER, 404, "Not Found" }, { SMS_BAD_TEXT, 400, "Bad Request" },
+		{ SMS_TOO_LONG, 513, "Message Too Large" }, { SMS_NO_PORT, 503, "Service Unavailable" },
+		{ SMS_UNSURE, 202, "Accepted" },
+	};
+	uint16_t scode = 500;
+	const char *reason = "SMS Not Sent";
+	size_t i, k;
+
+	for (i = 0; i < OUTQ && (!outq[i].msg || outq[i].id != id); i++)
+		;
+	if (i == OUTQ)
+		return;
+	for (k = 0; k < RE_ARRAY_SIZE(map); k++)
+		if (map[k].code == code) {
+			scode = map[k].scode;
+			reason = map[k].reason;
+		}
+	sip_treply(&outq[i].st, sip, outq[i].msg, scode, reason);
+	outq[i].msg = mem_deref(outq[i].msg);
+	outq[i].st = NULL;
+}
+
+static void in_resp(int err, const struct sip_msg *msg, void *arg)
+{
+	struct mctx *c = arg;
+	int i;
+
+	if (!err && msg && msg->scode < 200)
+		return;
+	for (i = 0; i < INQ && (!inq[i].text || strcmp(inq[i].key, c->key)); i++)
+		;
+	if (i < INQ) {
+		inq[i].pending--;
+		if (!err && msg && msg->scode < 300) {
+			cb->sms_delivered(inq[i].key);
+			free(inq[i].text);
+			memset(&inq[i], 0, sizeof(inq[i]));
+		}
+	}
+	mem_deref(c);
+}
+
+static void send_text(int i, const struct phone *p)
+{
+	struct sip_dialog *dlg = NULL;
+	struct mctx *c;
+	char from[128];
+	struct pl user;
+
+	pl_set_str(&user, inq[i].number);
+	re_snprintf(from, sizeof(from), "sip:%H@%s", uri_user_escape, &user, local_ip);
+	if (sip_dialog_alloc(&dlg, p->contact, p->contact, inq[i].number, from, NULL, 0))
+		return;
+	if ((c = mem_zalloc(sizeof(*c), NULL))) {
+		memcpy(c->key, inq[i].key, sizeof(c->key));
+		if (!sip_drequestf(NULL, sip, true, "MESSAGE", dlg, 0, NULL, NULL, in_resp, c,
+				   "Content-Type: text/plain;charset=UTF-8\r\nContent-Length: %zu\r\n\r\n%b",
+				   inq[i].n, inq[i].text, inq[i].n))
+			inq[i].pending++;
+		else
+			mem_deref(c);
+	}
+	mem_deref(dlg);
+}
+
+static void deliver_all(void)
+{
+	const struct phone *on[PHONES_MAX];
+	int n = reg_online(time(NULL), on, PHONES_MAX), i, k;
+
+	for (i = 0; i < INQ; i++)
+		if (inq[i].text && !inq[i].pending)
+			for (k = 0; k < n; k++)
+				send_text(i, on[k]);
+}
+
+void sip_sms_deliver(const char *key, const char *number, const char *text, size_t n)
+{
+	int i;
+
+	for (i = 0; i < INQ && inq[i].text; i++)
+		if (!strcmp(inq[i].key, key))
+			return;
+	if (i == INQ || !(inq[i].text = malloc(n + 1)))
+		return;
+	memcpy(inq[i].text, text, n);
+	inq[i].text[n] = 0;
+	inq[i].n = n;
+	snprintf(inq[i].key, sizeof(inq[i].key), "%s", key);
+	snprintf(inq[i].number, sizeof(inq[i].number), "%s", number);
+	deliver_all();
+}
+
+/* A text from a phone becomes an SMS from the SIM. The server transaction answers a resent
+ * request itself, so it never sends a second SMS. */
 static void on_message(const struct sip_msg *msg)
 {
 	const struct phone *p = authenticate(msg, 1, "MESSAGE");
@@ -126,7 +245,7 @@ static void on_message(const struct sip_msg *msg)
 	const char *body = "", *text;
 	char number[40] = "";
 	size_t n = 0, tn;
-	int r;
+	int r, i;
 
 	if (!p)
 		return;
@@ -148,26 +267,15 @@ static void on_message(const struct sip_msg *msg)
 		return;
 	}
 	re_snprintf(number, sizeof(number), "%H", uri_user_unescape, &msg->uri.user);
-	switch (cb->sms(p->name, number, text, tn)) {
-	case SMS_OK:
-		sip_treply(NULL, sip, msg, 200, "OK");
-		break;
-	case SMS_BAD_NUMBER:
-		sip_treply(NULL, sip, msg, 404, "Not Found");
-		break;
-	case SMS_BAD_TEXT:
-		sip_treply(NULL, sip, msg, 400, "Bad Request");
-		break;
-	case SMS_TOO_LONG:
-		sip_treply(NULL, sip, msg, 513, "Message Too Large");
-		break;
-	case SMS_NO_PORT:
+	for (i = 0; i < OUTQ && outq[i].msg; i++)
+		;
+	if (i == OUTQ || sip_strans_alloc(&outq[i].st, sip, msg, NULL, NULL)) {
 		sip_treply(NULL, sip, msg, 503, "Service Unavailable");
-		break;
-	default:
-		sip_treply(NULL, sip, msg, 500, "SMS Not Sent");
-		break;
+		return;
 	}
+	outq[i].msg = mem_ref((void *)msg);
+	outq[i].id = ++next_id;
+	cb->sms(outq[i].id, p->name, number, text, tn);
 }
 
 static bool on_request(const struct sip_msg *msg, void *arg)
@@ -371,6 +479,12 @@ int sip_start(const char *bind_ip, int port, int rtp_from, int rtp_to, const str
 
 void sip_stop(void)
 {
+	int i;
+
+	for (i = 0; i < OUTQ; i++)
+		outq[i].msg = mem_deref(outq[i].msg);
+	for (i = 0; i < INQ; i++)
+		free(inq[i].text);
 	drop_legs();
 	reap(NULL);
 	active = mem_deref(active);

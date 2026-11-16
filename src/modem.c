@@ -15,7 +15,15 @@
 
 #define QUECTEL_VID	"2c7c"
 #define AT_IFACE	2
+#ifndef AT_DAEMON
 #define AT_DAEMON	"/etc/init.d/ubus-at-daemon"
+#endif
+#ifndef UBUS
+#define UBUS		"ubus"
+#endif
+#ifndef SMS_TMP
+#define SMS_TMP		"/tmp/msipd-sms.txt"
+#endif
 #define QMODEM_NET	"/etc/init.d/qmodem_network"
 #ifndef MMCLI
 #define MMCLI		"/usr/bin/mmcli"
@@ -213,8 +221,19 @@ static int at_direct_until(const char *tty, const char *cmd, char *resp, size_t 
 	return rc;
 }
 
+/* ESC ends a prompt the modem may still show, else it takes whatever comes next on the port
+ * (the phone's own AT commands) as message text. */
+static void cancel_prompt(int fd)
+{
+	char r[64];
+
+	if (write(fd, "\x1b", 1) == 1)
+		at_xfer(fd, "AT", "\r", r, sizeof(r), 1000, NULL);
+}
+
 /* PDU mode, AT+CMGS, wait for the prompt, then the PDU and Ctrl-Z. Keeps the port locked the
- * whole time so other AT users can't land in the middle, and puts text mode back if it was on. */
+ * whole time so other AT users can't land in the middle, and puts text mode back if it was on.
+ * -3: the PDU went out but the modem never confirmed it, so it may still arrive. */
 static int sms_direct(const char *tty, const char *pdu, int len, char *resp, size_t n)
 {
 	char cmd[32], r[128];
@@ -228,12 +247,17 @@ static int sms_direct(const char *tty, const char *pdu, int len, char *resp, siz
 	}
 	text = !at_xfer(fd, "AT+CMGF?", "\r", r, sizeof(r), 2000, NULL) && strstr(r, "+CMGF: 1");
 	snprintf(cmd, sizeof(cmd), "AT+CMGS=%d", len);
-	if (!at_xfer(fd, "AT+CMGF=0", "\r", resp, n, 2000, NULL) && !strstr(resp, "ERROR") &&
-	    !at_xfer(fd, cmd, "\r", resp, n, 5000, ">") && !strstr(resp, "ERROR")) {
-		/* The network can take a while to accept it. A SIP app gives up after 32 s. */
-		rc = at_xfer(fd, pdu, "\x1a", resp, n, 25000, NULL);
-		if (!rc && !strstr(resp, "+CMGS:"))
-			rc = -1;
+	if (!at_xfer(fd, "AT+CMGF=0", "\r", resp, n, 2000, NULL) && !strstr(resp, "ERROR")) {
+		if (at_xfer(fd, cmd, "\r", resp, n, 5000, ">") || strstr(resp, "ERROR")) {
+			if (!strstr(resp, "ERROR"))
+				cancel_prompt(fd);
+		} else if (at_xfer(fd, pdu, "\x1a", resp, n, 25000, NULL)) {
+			/* The network can take a while to accept it. A SIP app gives up after 32 s. */
+			cancel_prompt(fd);
+			rc = -3;
+		} else {
+			rc = strstr(resp, "+CMGS:") ? 0 : -1;
+		}
 	}
 	if (text)
 		at_xfer(fd, "AT+CMGF=1", "\r", r, sizeof(r), 2000, NULL);
@@ -343,15 +367,13 @@ static int mm_reply(const char *out, char *resp, size_t n)
 	return 0;
 }
 
-static int mm_owns(void)
+static int mm_present(void)
 {
 	static long checked = -100000;
 	static int owns;
 	char buf[256] = "";
 	FILE *p;
 
-	if (mm_no_at)
-		return 0;
 	if (ms_now() - checked < 10000)
 		return owns;
 	checked = ms_now();
@@ -361,6 +383,11 @@ static int mm_owns(void)
 	owns = fread(buf, 1, sizeof(buf) - 1, p) > 0 && strstr(buf, "/Modem/");
 	pclose(p);
 	return owns;
+}
+
+static int mm_owns(void)
+{
+	return !mm_no_at && mm_present();
 }
 
 static int at_mm(const char *cmd, char *resp, size_t n, int secs)
@@ -421,15 +448,135 @@ int modem_at_wait(const char *cmd, char *resp, size_t n, int secs, const char *u
 	return pclose(p) == 0 ? 0 : -1;
 }
 
-/* Sending needs the > prompt of AT+CMGS, which only the AT port itself gives. Through the
- * QModem at-daemon or ModemManager this returns -2. */
+static int run(const char *cmd, char *out, size_t n)
+{
+	FILE *p = popen(cmd, "r");
+	size_t got;
+
+	out[0] = 0;
+	if (!p)
+		return -1;
+	got = fread(out, 1, n - 1, p);
+	out[got] = 0;
+	return pclose(p) == 0 ? 0 : -1;
+}
+
+static void sms_error(const char *out, char *resp, size_t n)
+{
+	const char *e = strstr(out, "+CMS ERROR");
+
+	if (!e)
+		e = strstr(out, "+CME ERROR");
+	if (e) {
+		snprintf(resp, n, "%.*s", (int)strcspn(e, "\\\"'\r\n"), e);
+		return;
+	}
+	if ((e = strstr(out, "\"message\": \""))) {
+		e += 12;
+		snprintf(resp, n, "%.*s", (int)strcspn(e, "\\\"\r\n"), e);
+		return;
+	}
+	if ((e = strstr(out, "): ")))
+		e += 3;
+	else
+		e = strncmp(out, "error: ", 7) ? out : out + 7;
+	snprintf(resp, n, "%.*s", (int)strcspn(e, "\r\n"), e);
+}
+
+static int daemon_sendat(const char *ap, const char *field, const char *val, const char *flag,
+			 int secs, char *out, size_t n)
+{
+	char line[1024];
+
+	snprintf(line, sizeof(line),
+		 UBUS " -t %d call at-daemon sendat '{\"at_port\":\"%s\",\"%s\":\"%s\",%s%s%s\"timeout\":%d}' 2>/dev/null",
+		 secs + 5, ap, field, val, flag ? "\"end_flag\":\"" : "", flag ? flag : "", flag ? "\"," : "", secs);
+	return run(line, out, n);
+}
+
+static int sms_daemon(const char *ap, const char *pdu, int len, char *resp, size_t n)
+{
+	char cmd[32], raw[2 * 2 * 160 + 3], out[1024];
+	size_t i;
+
+	if (strpbrk(ap, "'\"\\"))
+		return -1;
+	for (i = 0; pdu[i] && 2 * i + 5 < sizeof(raw); i++)
+		sprintf(raw + 2 * i, "%02X", (unsigned char)pdu[i]);
+	strcpy(raw + 2 * i, "1A");
+	daemon_sendat(ap, "at_cmd", "AT+CMGF=0", NULL, 3, out, sizeof(out));
+	snprintf(cmd, sizeof(cmd), "AT+CMGS=%d", len);
+	daemon_sendat(ap, "at_cmd", cmd, ">", 5, out, sizeof(out));
+	if (!strstr(out, "ERROR")) {
+		daemon_sendat(ap, "raw_at_content", raw, NULL, 25, out, sizeof(out));
+		if (strstr(out, "+CMGS:"))
+			return 0;
+		if (!strstr(out, "ERROR")) {
+			daemon_sendat(ap, "raw_at_content", "1B", NULL, 2, out, sizeof(out));
+			return -3;
+		}
+	}
+	sms_error(out, resp, n);
+	return -1;
+}
+
 int modem_sms(const char *pdu, int len, char *resp, size_t n)
 {
 	const char *ap = port();
 
 	if (n)
 		resp[0] = 0;
-	if (!*ap || !modem_direct() || mm_owns())
+	if (!*ap)
 		return -2;
-	return sms_direct(ap, pdu, len, resp, n);
+	if (modem_direct())
+		return sms_direct(ap, pdu, len, resp, n);
+	return sms_daemon(ap, pdu, len, resp, n);
+}
+
+int modem_sms_text(const char *number, const char *text, size_t len, char *resp, size_t n)
+{
+	char line[256], out[1024];
+	const char *s;
+	FILE *f;
+	int id, rc = -1;
+
+	if (n)
+		resp[0] = 0;
+	if (!mm_present())
+		return -2;
+	if (strspn(number, "+0123456789") != strlen(number) || !(f = fopen(SMS_TMP, "w")))
+		return -1;
+	fwrite(text, 1, len, f);
+	fclose(f);
+	snprintf(line, sizeof(line), MMCLI " -m any --messaging-create-sms=\"number='%s'\" "
+		 "--messaging-create-sms-with-text=" SMS_TMP " 2>&1", number);
+	run(line, out, sizeof(out));
+	unlink(SMS_TMP);
+	if (!(s = strstr(out, "/SMS/"))) {
+		sms_error(out, resp, n);
+		return -1;
+	}
+	id = atoi(s + 5);
+	snprintf(line, sizeof(line), MMCLI " -s %d --send --timeout=25 2>&1", id);
+	run(line, out, sizeof(out));
+	if (strstr(out, "successfully sent"))
+		rc = 0;
+	else
+		sms_error(out, resp, n);
+	snprintf(line, sizeof(line), MMCLI " -m any --messaging-delete-sms=%d 2>&1", id);
+	run(line, out, sizeof(out));
+	return rc;
+}
+
+int modem_mm(void)
+{
+	return mm_present();
+}
+
+int modem_mm_cmd(const char *args, char *out, size_t n)
+{
+	char line[256];
+
+	snprintf(line, sizeof(line), MMCLI " %s 2>&1", args);
+	return run(line, out, n);
 }

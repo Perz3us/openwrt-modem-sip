@@ -21,9 +21,15 @@ Every phone gets its own login, made on the router, with a QR code for Linphone.
 call rings all phones at once and the first one to answer gets it. You can call out from any
 phone, and keypad tones work for bank and carrier menus.
 
-Texts sent from a phone's chat go out as SMS from the SIM. Long texts are split into parts that
-the other phone joins back together, and anything outside the GSM alphabet, like Sinhala or
-emoji, is sent as Unicode. The app shows the text as delivered once the network has taken it.
+Texts work both ways, also during a call. A text sent from a phone's chat goes out as an SMS
+from the SIM, and an SMS that arrives on the SIM shows up in the chat of every phone that is
+online, from the sender's number. Long texts are split and joined back together, and anything
+outside the GSM alphabet, like Sinhala or emoji, is sent as Unicode. A text that arrives while no
+phone is online waits until one logs in.
+
+Received texts stay on the SIM when QModem's SMS page is installed, so it still shows them.
+Otherwise they are deleted once a phone has them, so the SIM never fills up. When QModem's own
+SMS service runs, it keeps receiving and Modem SIP only sends.
 
 When HD calling is on, calls use Opus or G.722, otherwise PCMA or PCMU. The call history on the
 phone port says which phone answered, like Answered on Pixel, and call recording works through
@@ -63,8 +69,9 @@ The phone shows as online once it has logged in. Ports and HD are on the Setting
 because there was no audio format in common, the log line shows what the app offered.
 
 A text that fails shows as not delivered in the app, and the log says why, with the modem's
-error such as `+CMS ERROR: 500`. Sending SMS needs the modem AT port itself, so it doesn't work
-while the QModem at-daemon or ModemManager holds the modem.
+error such as `+CMS ERROR: 500`. Texts go out through
+ModemManager when it runs the modem, through the QModem at-daemon when it is installed, and
+straight to the AT port otherwise.
 
 ## Build
 

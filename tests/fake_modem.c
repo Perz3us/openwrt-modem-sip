@@ -26,8 +26,8 @@ int modem_at_wait(const char *cmd, char *resp, size_t n, int secs, const char *u
 		fclose(f);
 	}
 	resp[0] = 0;
-	if (!strcmp(cmd, "AT+CLCC")) {
-		snprintf(path, sizeof(path), "%s/clcc", dir());
+	if (!strcmp(cmd, "AT+CLCC") || !strcmp(cmd, "AT+CMGL=4")) {
+		snprintf(path, sizeof(path), "%s/%s", dir(), cmd[3] == 'C' && cmd[4] == 'L' ? "clcc" : "cmgl");
 		if ((f = fopen(path, "r"))) {
 			got = fread(resp, 1, n - 8, f);
 			fclose(f);
@@ -54,4 +54,27 @@ int modem_sms(const char *pdu, int len, char *resp, size_t n)
 	}
 	snprintf(resp, n, "+CMGS: 1\r\nOK\r\n");
 	return 0;
+}
+
+int modem_sms_text(const char *number, const char *text, size_t len, char *resp, size_t n)
+{
+	(void)number;
+	(void)text;
+	(void)len;
+	if (n)
+		resp[0] = 0;
+	return -2;
+}
+
+int modem_mm(void)
+{
+	return 0;
+}
+
+int modem_mm_cmd(const char *args, char *out, size_t n)
+{
+	(void)args;
+	if (n)
+		out[0] = 0;
+	return -1;
 }

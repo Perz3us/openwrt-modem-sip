@@ -1,7 +1,7 @@
 CFLAGS ?= -O2
 override CFLAGS += -std=gnu11 -Wall -Wextra -Werror
 override CFLAGS += -I/usr/local/include/re -I$(STAGING_DIR)/usr/include/re
-CORE = build/msipd.o build/codec.o build/g722.o build/clcc.o build/phones.o build/call.o build/audio.o build/media.o build/sip.o build/bus.o build/sms.o
+CORE = build/msipd.o build/codec.o build/g722.o build/clcc.o build/phones.o build/call.o build/audio.o build/media.o build/sip.o build/bus.o build/sms.o build/smsw.o
 OBJS = $(CORE) build/modem.o
 LIBS = -lre -lubus -lubox -luci -lopus -lm
 
@@ -15,7 +15,7 @@ build/g722.o: src/g722.c src/g722.h
 	mkdir -p build
 	$(CC) $(CFLAGS) -Wno-unused-parameter -c -o $@ $<
 
-build/modem.o: src/modem.c src/modem.h
+build/modem.o build/smsw.o: build/%.o: src/%.c $(wildcard src/*.h)
 	mkdir -p build
 	$(CC) $(CFLAGS) -Wno-format-truncation -c -o $@ $<
 
@@ -30,6 +30,8 @@ test: build/codec.o build/g722.o
 	./build/test_clcc
 	$(CC) $(CFLAGS) -Wno-unused-function -Wno-format-truncation -o build/test_modem tests/test_modem.c
 	./build/test_modem
+	$(CC) $(CFLAGS) -Wno-unused-function -Wno-format-truncation -o build/test_modem_sms tests/test_modem_sms.c -lutil
+	./build/test_modem_sms
 	$(CC) $(CFLAGS) -o build/test_phones tests/test_phones.c src/phones.c -lre -luci -lubox
 	./build/test_phones
 	$(CC) $(CFLAGS) -o build/test_call tests/test_call.c src/call.c

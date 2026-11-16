@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<scenario name="uas sms">
+<recv request="MESSAGE">
+  <action>
+    <ereg regexp="hello from the SIM" search_in="body" check_it="true" assign_to="1"/>
+    <ereg regexp="sip:0771234567@" search_in="hdr" header="From:" check_it="true" assign_to="2"/>
+  </action>
+</recv>
+<send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:];tag=[call_number]
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+<Reference variables="1,2"/>
+</scenario>
