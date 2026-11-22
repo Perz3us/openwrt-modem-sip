@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 (2026-11-22)
+
+- A call no longer goes silent and stays open on the phone when the phone app changes network, for example from Wi-Fi to mobile data. The app's new address is now accepted instead of refused
+- Audio is sent to wherever the phone's audio really comes from
+- When no audio comes from the phone for 30 seconds during a call, the call is ended on both sides
+
 ## 0.3.0 (2026-11-16)
 
 - SMS that arrive on the SIM show up in the chat of every phone that is online, and wait for a phone that is offline

@@ -43,7 +43,7 @@ sleep 0.5
 old() { i=0; while [ $i -lt 40 ]; do printf '+CMGL: %d,1,,25\r\n00040A8170173254760008621131010000%02X06006F006C0064\r\n' $(($1 + i)) $((i + 16)); i=$((i + 1)); done; }
 old 100 > $MSIP_FAKE/cmgl
 rm -f /tmp/msip-sms-seen
-MSIP_SMS_SEEN=/tmp/msip-sms-seen MSIP_SMS_CHECK=1 ./build/msipd-test -c $C -b 127.0.0.1 -s /tmp/msip-pcm.sock &
+MSIP_SILENT_S=6 MSIP_SMS_SEEN=/tmp/msip-sms-seen MSIP_SMS_CHECK=1 ./build/msipd-test -c $C -b 127.0.0.1 -s /tmp/msip-pcm.sock &
 MSIPD=$!
 sleep 0.5
 
@@ -156,6 +156,19 @@ sleep 0.5
 { old 200; printf '+CMGL: 5,0,,45\r\n00040A8170173254760008621131010000002400680065006C006C006F002000660072006F006D0020007400680065002000530049004D\r\n'; } > $MSIP_FAKE/cmgl
 wait $A && ok "received SMS reaches the phone" || bad "received SMS reaches the phone"
 wait_at "AT+CMGD=5" && ok "delivered SMS is deleted" || bad "delivered SMS is deleted"
+
+: > $MSIP_FAKE/at.log
+sipp 127.0.0.1:5060 -sf $S/uas_answer.xml -p 5062 -m 1 -nostdin -timeout 20 -timeout_error >/dev/null 2>&1 &
+A=$!
+sleep 0.5
+clcc '+CLCC: 1,1,4,0,0,"0771234567",129'
+wait_at ATA
+clcc '+CLCC: 1,1,0,0,0,"0771234567",129'
+i=0
+while [ $i -lt 100 ] && ! at_has AT+CHUP; do sleep 0.1; i=$((i + 1)); done
+[ $i -ge 40 ] && at_has AT+CHUP && ok "silent phone ends the call" || bad "silent phone ends the call ($i)"
+clcc ''
+wait $A && ok "silent phone gets a BYE" || bad "silent phone gets a BYE"
 
 kill -0 $MSIPD && ok "msipd still running" || bad "msipd still running"
 kill $MSIPD $UBUSD 2>/dev/null

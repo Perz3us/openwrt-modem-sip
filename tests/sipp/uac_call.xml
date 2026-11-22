@@ -99,13 +99,46 @@ Duration=160
 ]]></send>
 <recv response="200" timeout="3000"/>
 <send retrans="500"><![CDATA[
+INVITE sip:0771234567@[remote_ip] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+From: <sip:[service]@[remote_ip]>;tag=[call_number]
+[last_To:]
+Call-ID: [call_id]
+Max-Forwards: 70
+CSeq: 4 INVITE
+Contact: <sip:[service]@[local_ip]:[local_port]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=phone 1 2 IN IP4 [local_ip]
+s=-
+c=IN IP4 127.0.0.3
+t=0 0
+m=audio 40002 RTP/AVP 0 8 101
+a=rtpmap:101 telephone-event/8000
+]]></send>
+<recv response="100" optional="true"/>
+<recv response="200" timeout="3000"/>
+<send><![CDATA[
+ACK sip:0771234567@[remote_ip] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+From: <sip:[service]@[remote_ip]>;tag=[call_number]
+[last_To:]
+Call-ID: [call_id]
+Max-Forwards: 70
+CSeq: 4 ACK
+Content-Length: 0
+
+]]></send>
+<send retrans="500"><![CDATA[
 BYE sip:0771234567@[remote_ip] SIP/2.0
 Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
 From: <sip:[service]@[remote_ip]>;tag=[call_number]
 [last_To:]
 Call-ID: [call_id]
 Max-Forwards: 70
-CSeq: 4 BYE
+CSeq: 5 BYE
 Content-Length: 0
 
 ]]></send>

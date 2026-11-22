@@ -11,12 +11,15 @@
 #define PT_DTMF		101
 
 typedef void (media_dtmf_h)(char digit);
+typedef void (media_dead_h)(void);
 
-int media_open(const struct sa *laddr, uint16_t from, uint16_t to, media_dtmf_h *dtmfh);
+int media_open(const struct sa *laddr, uint16_t from, uint16_t to, media_dtmf_h *dtmfh, media_dead_h *deadh);
 uint16_t media_port(void);
 void media_close(void);
 int media_offer(struct mbuf **mb, const struct sa *laddr, int hd);
 int media_answer(struct mbuf **mb, const struct sa *laddr, struct mbuf *offer, int hd);
 int media_take_answer(struct mbuf *answer, int hd);
+int media_current(struct mbuf **mb);
+void media_live(void);
 
 #endif

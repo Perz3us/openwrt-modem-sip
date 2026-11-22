@@ -337,6 +337,8 @@ static int on_leg_answer(const struct sip_msg *msg, void *arg)
 	drop_legs();
 	if (!msg->mb || media_take_answer(msg->mb, cb->hd()))
 		syslog(LOG_WARNING, "%s: could not use the audio in its answer, the call has no sound", active_name);
+	else
+		media_live();
 	cb->answered(active_name);
 	return 0;
 }
@@ -380,6 +382,26 @@ static int answer_ignore(const struct sip_msg *msg, void *arg)
 	return 0;
 }
 
+static int on_reoffer(struct mbuf **descp, const struct sip_msg *msg, void *arg)
+{
+	(void)arg;
+	if (!mbuf_get_left(msg->mb))
+		return media_current(descp);
+	if (media_answer(descp, &maddr, msg->mb, cb->hd())) {
+		syslog(LOG_WARNING, "%s: could not use the new audio settings from the phone", active_name);
+		return EPROTO;
+	}
+	return 0;
+}
+
+static void on_dead(void)
+{
+	if (!active)
+		return;
+	sip_bye();
+	cb->hangup();
+}
+
 static void on_invite(const struct sip_msg *msg, void *arg)
 {
 	const struct phone *p;
@@ -408,7 +430,7 @@ static void on_invite(const struct sip_msg *msg, void *arg)
 		return;
 	}
 	if (sipsess_accept(&active, ssock, msg, 180, "Ringing", REL100_DISABLED, "msipd", "application/sdp", NULL,
-			   NULL, NULL, false, NULL, answer_ignore, on_estab, on_info, NULL, on_close, NULL, NULL)) {
+			   NULL, NULL, false, on_reoffer, answer_ignore, on_estab, on_info, NULL, on_close, NULL, NULL)) {
 		mem_deref(desc);
 		return;
 	}
@@ -422,6 +444,7 @@ void sip_connected(void)
 	if (active && out_desc) {
 		sipsess_answer(active, 200, "OK", out_desc, NULL);
 		out_desc = mem_deref(out_desc);
+		media_live();
 	}
 }
 
@@ -437,7 +460,7 @@ void sip_ring_all(const char *number)
 			continue;
 		snprintf(legs[i].name, sizeof(legs[i].name), "%s", on[i]->name);
 		sipsess_connect(&legs[i].sess, ssock, on[i]->contact, number, from, "msipd", NULL, 0,
-				"application/sdp", NULL, NULL, false, NULL, leg_offer, NULL, on_leg_answer, NULL,
+				"application/sdp", NULL, NULL, false, NULL, leg_offer, on_reoffer, on_leg_answer, NULL,
 				on_estab, on_info, NULL, on_close, &legs[i], NULL);
 	}
 }
@@ -474,7 +497,7 @@ int sip_start(const char *bind_ip, int port, int rtp_from, int rtp_to, const str
 	    (err = sip_listen(&lsnr, sip, true, on_request, NULL)) ||
 	    (err = sipsess_listen(&ssock, sip, 32, on_invite, NULL)))
 		return err;
-	return media_open(&maddr, rtp_from, rtp_to, cb->digit);
+	return media_open(&maddr, rtp_from, rtp_to, cb->digit, on_dead);
 }
 
 void sip_stop(void)

@@ -21,7 +21,7 @@
 #include "sms.h"
 #include "smsw.h"
 
-#define MSIPD_VERSION	"0.2.1"
+#define MSIPD_VERSION	"0.3.1"
 #define POLL_MS		500
 
 static struct re_fhs *bus_fhs, *sms_fhs;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2026 perz3us
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <syslog.h>
@@ -8,6 +9,7 @@
 #include "codec.h"
 #include "media.h"
 
+#define SILENT_MS 30000
 #define OPUS_FMTP "minptime=10;useinbandfec=1;maxplaybackrate=16000;sprop-maxcapturerate=16000"
 
 static struct rtp_sock *rtp;
@@ -16,6 +18,10 @@ static struct sa remote;
 static struct g722 *g722;
 static struct opus16 *opus;
 static media_dtmf_h *dtmf_cb;
+static media_dead_h *dead_cb;
+static uint64_t last_rx;
+static int live, sends, watch, silent_ms = SILENT_MS;
+static struct sdp_session *cur;
 static int pt = -1, kind = C_NONE, dtmf_pt = PT_DTMF;
 static uint32_t ts;
 static uint32_t dtmf_ts;
@@ -80,6 +86,12 @@ static void on_tick(void *arg)
 	tmr_start(&tick, 10, on_tick, NULL);
 	while (kind != C_NONE && (n = audio_fxsd.read(pcm, 320)) > 0)
 		send_frame(pcm, n);
+	if (kind != C_NONE && watch && tmr_jiffies() - last_rx > (uint64_t)silent_ms) {
+		syslog(LOG_WARNING, "no audio from the phone for %d seconds, ending the call", silent_ms / 1000);
+		watch = 0;
+		if (dead_cb)
+			dead_cb();
+	}
 }
 
 static void put16(const int16_t *pcm, int n)
@@ -130,10 +142,10 @@ static void on_rtp(const struct sa *src, const struct rtp_header *hdr, struct mb
 	const uint8_t *p = mbuf_buf(mb);
 	int k;
 
-	(void)src;
 	(void)arg;
 	if (kind == C_NONE)
 		return;
+	last_rx = tmr_jiffies();
 	if (hdr->pt == dtmf_pt) {
 		if (n >= 4 && (p[1] & 0x80) && hdr->ts != dtmf_ts && dtmf_cb && p[0] < 16) {
 			dtmf_ts = hdr->ts;
@@ -146,6 +158,13 @@ static void on_rtp(const struct sa *src, const struct rtp_header *hdr, struct mb
 		if (k == C_NONE || use(hdr->pt, k))
 			return;
 	}
+	if (!sa_cmp(src, &remote, SA_ALL)) {
+		char where[64];
+
+		remote = *src;
+		re_snprintf(where, sizeof(where), "%J", src);
+		syslog(LOG_INFO, "phone audio now comes from %s, sending there", where);
+	}
 	if (kind == C_OPUS) {
 		put16(pcm, opus16_dec(opus, p, n, pcm, 960));
 	} else if (kind == C_G722) {
@@ -157,9 +176,14 @@ static void on_rtp(const struct sa *src, const struct rtp_header *hdr, struct mb
 	}
 }
 
-int media_open(const struct sa *laddr, uint16_t from, uint16_t to, media_dtmf_h *dtmfh)
+int media_open(const struct sa *laddr, uint16_t from, uint16_t to, media_dtmf_h *dtmfh, media_dead_h *deadh)
 {
+	const char *s = getenv("MSIP_SILENT_S");
+
 	dtmf_cb = dtmfh;
+	dead_cb = deadh;
+	if (s && atoi(s) > 0)
+		silent_ms = atoi(s) * 1000;
 	if (rtp)
 		return 0;
 	return rtp_listen(&rtp, IPPROTO_UDP, laddr, from, to, false, on_rtp, NULL, NULL);
@@ -181,16 +205,29 @@ const char *media_codec(void)
 	return "none";
 }
 
-static void start(const struct sa *r, int p, int k)
+void media_live(void)
+{
+	live = 1;
+	watch = sends;
+	last_rx = tmr_jiffies();
+}
+
+static void start(const struct sa *r, int p, int k, int remote_sends)
 {
 	char where[64];
+	int same = p == pt && k == kind;
 
-	if (use(p, k))
+	if (!same && use(p, k))
 		return;
 	remote = *r;
-	ts = 0;
-	audio_fxsd.open();
-	tmr_start(&tick, 10, on_tick, NULL);
+	sends = remote_sends;
+	watch = live && sends;
+	last_rx = tmr_jiffies();
+	if (!same) {
+		ts = 0;
+		audio_fxsd.open();
+		tmr_start(&tick, 10, on_tick, NULL);
+	}
 	re_snprintf(where, sizeof(where), "%J", r);
 	syslog(LOG_INFO, "audio %s to %s", media_codec(), where);
 }
@@ -205,6 +242,8 @@ void media_close(void)
 	opus = NULL;
 	pt = -1;
 	kind = C_NONE;
+	live = watch = 0;
+	cur = mem_deref(cur);
 }
 
 static int add_dtmf(struct sdp_media *m, const char *id, uint32_t rate)
@@ -306,8 +345,6 @@ int media_offer(struct mbuf **mb, const struct sa *laddr, int hd)
 	return 0;
 }
 
-static struct sdp_session *answered;
-
 int media_answer(struct mbuf **mb, const struct sa *laddr, struct mbuf *offer, int hd)
 {
 	struct sdp_session *all = NULL, *sess = NULL;
@@ -340,10 +377,16 @@ int media_answer(struct mbuf **mb, const struct sa *laddr, struct mbuf *offer, i
 		mem_deref(sess);
 		return err;
 	}
-	mem_deref(answered);
-	answered = sess;
-	start(sdp_media_raddr(one), p, k);
+	mem_deref(cur);
+	cur = sess;
+	start(sdp_media_raddr(one), p, k, sdp_media_rdir(one) == SDP_SENDRECV);
 	return 0;
+}
+
+int media_current(struct mbuf **mb)
+{
+	// shortcut: an offerless re-INVITE gets the last SDP back and its answer is ignored, enough for a session refresh
+	return cur ? sdp_encode(mb, cur, true) : EPROTO;
 }
 
 int media_take_answer(struct mbuf *answer, int hd)
@@ -353,8 +396,12 @@ int media_take_answer(struct mbuf *answer, int hd)
 
 	if (!err && (p = pick(offered_m, hd, 1, &k, &dtmf)) < 0)
 		err = EPROTO;
-	if (!err)
-		start(sdp_media_raddr(offered_m), p, k);
+	if (!err) {
+		start(sdp_media_raddr(offered_m), p, k, sdp_media_rdir(offered_m) == SDP_SENDRECV);
+		mem_deref(cur);
+		cur = offered;
+		offered = NULL;
+	}
 	offered = mem_deref(offered);
 	return err;
 }
