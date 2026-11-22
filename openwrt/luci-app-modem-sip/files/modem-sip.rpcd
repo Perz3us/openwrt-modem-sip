@@ -8,6 +8,9 @@ PHONES=${PHONES:-/usr/share/fxs/sip/modem-sip/phones}
 ACCOUNT=${ACCOUNT:-/usr/share/fxs/sip/modem-sip/account}
 MSIPD_INIT=${MSIPD_INIT:-/etc/init.d/msipd}
 SIP_VPN=${SIP_VPN:-/usr/libexec/fxs-sip-vpn}
+RELEASE=${RELEASE:-https://api.github.com/repos/Perz3us/openwrt-modem-sip/releases/latest}
+UPD_DIR=${UPD_DIR:-/tmp/modem-sip-update}
+UPD_LOG=${UPD_LOG:-/tmp/modem-sip-update.log}
 
 result() {
 	json_init
@@ -146,9 +149,58 @@ set_settings() {
 	result 1
 }
 
+pkg_version() {
+	local v
+
+	v=$(apk list -I "$1" 2>/dev/null | sed -n "s/^$1-\([^ ]*\) .*/\1/p" | head -1)
+	[ -n "$v" ] || v=$(opkg list-installed "$1" 2>/dev/null | sed -n "s/^$1 - //p")
+	echo "$v"
+}
+
+fetch() {
+	wget -q -T 20 -U luci-app-modem-sip -O "$2" "$1"
+}
+
+update_check() {
+	local rel
+
+	[ -d "$UPD_DIR" ] || rel=$(fetch "$RELEASE" - 2>/dev/null)
+	json_init
+	json_add_string installed "$(pkg_version modem-sip)"
+	json_add_string latest "$(echo "$rel" | jsonfilter -q -e '@.tag_name' | sed 's/^v//')"
+	json_add_string notes "$(echo "$rel" | jsonfilter -q -e '@.body')"
+	json_add_boolean apk "$(command -v apk >/dev/null && echo 1 || echo 0)"
+	json_add_boolean sms_clash "$([ -n "$(pkg_version aw1000-voice-sms)" ] && echo 1 || echo 0)"
+	json_add_boolean busy "$([ -d "$UPD_DIR" ] && echo 1 || echo 0)"
+	json_add_string log "$(tail -n 15 "$UPD_LOG" 2>/dev/null)"
+	json_dump
+}
+
+update_run() {
+	local u
+
+	echo "Looking for the latest release"
+	for u in $(fetch "$RELEASE" - | jsonfilter -e '@.assets[*].browser_download_url' | grep -E '/(libre2|modem-sip|luci-app-modem-sip)-[0-9][^/]*\.apk$'); do
+		echo "Downloading ${u##*/}"
+		fetch "$u" "$UPD_DIR/${u##*/}" || return 1
+	done
+	ls "$UPD_DIR"/modem-sip-*.apk >/dev/null 2>&1 || { echo "No packages found in the release"; return 1; }
+	# firmware that ships its own modem-sip can own the same files under another package
+	apk add --allow-untrusted --force-overwrite "$UPD_DIR"/*.apk
+}
+
+update_install() {
+	command -v apk >/dev/null && mkdir "$UPD_DIR" 2>/dev/null && {
+		( update_run && echo "Done" || echo "Update failed"; rm -rf "$UPD_DIR" ) >"$UPD_LOG" 2>&1 </dev/null &
+		echo '{ "result": true }'
+		return
+	}
+	echo '{ "result": false }'
+}
+
 case "$1" in
 list)
-	echo '{ "status": {}, "phone_add": { "name": "" }, "phone_remove": { "name": "" }, "phone_login": { "name": "" }, "phone_password": { "name": "", "password": "" }, "phone_rename": { "name": "", "new": "" }, "settings": {}, "set_settings": { "port": 0, "rtp_from": 0, "rtp_to": 0, "hd": true } }'
+	echo '{ "status": {}, "phone_add": { "name": "" }, "phone_remove": { "name": "" }, "phone_login": { "name": "" }, "phone_password": { "name": "", "password": "" }, "phone_rename": { "name": "", "new": "" }, "settings": {}, "set_settings": { "port": 0, "rtp_from": 0, "rtp_to": 0, "hd": true }, "update_check": {}, "update_install": {} }'
 	;;
 call)
 	case "$2" in
@@ -160,6 +212,8 @@ call)
 	phone_rename) rename ;;
 	settings) settings ;;
 	set_settings) set_settings ;;
+	update_check) update_check ;;
+	update_install) update_install ;;
 	esac
 	;;
 esac

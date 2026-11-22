@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 (2026-11-22)
+
+- The Settings page can check GitHub for a new version and install it
+- It warns when the firmware has its own SMS service that would clash with this one
+
 ## 0.3.1 (2026-11-22)
 
 - A call no longer goes silent and stays open on the phone when the phone app changes network, for example from Wi-Fi to mobile data. The app's new address is now accepted instead of refused

@@ -5,7 +5,8 @@
 			"ubus": {
 				"modem-sip": [
 					"status",
-					"settings"
+					"settings",
+					"update_check"
 				],
 				"fxs": [
 					"sip_services"
@@ -20,7 +21,8 @@
 					"phone_login",
 					"phone_password",
 					"phone_rename",
-					"set_settings"
+					"set_settings",
+					"update_install"
 				],
 				"fxs": [
 					"set_sip",

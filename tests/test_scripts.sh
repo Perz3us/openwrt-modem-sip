@@ -98,6 +98,47 @@ printf '#!/bin/sh\necho "{ \\"state\\": \\"active\\" }"\n' > $T/bin/ubus
 out=$(rpc set_settings '{"port":5090,"rtp_from":13000,"rtp_to":13100,"hd":true}')
 [ "$out" = '{"result":false,"error":"busy"}' ] && [ "$(uci -q get modem_sip.main.port)" = 5080 ] && ok "no port change during a call" || bad "no port change during a call ($out)"
 printf '#!/bin/sh\nexit 1\n' > $T/bin/ubus
+cat > $T/release.json <<'EOF'
+{"tag_name":"v0.3.1","body":"Fixes a silent call.","assets":[{"browser_download_url":"https://x/libre2-3.16.0-r1.apk"},{"browser_download_url":"https://x/modem-sip-0.3.1-r1.apk"},{"browser_download_url":"https://x/luci-app-modem-sip-0.3.1-r1.apk"},{"browser_download_url":"https://x/modem-sip_0.3.1-r1_aarch64.ipk"}]}
+EOF
+cat > $T/bin/wget <<EOF
+#!/bin/sh
+while [ \$# -gt 1 ]; do [ "\$1" = -O ] && out=\$2; shift; done
+case "\$1" in *api.github.com*) data=\$(cat $T/release.json) ;; *) data=pkg ;; esac
+[ "\$out" = - ] && echo "\$data" || echo "\$data" > "\$out"
+EOF
+cat > $T/bin/jsonfilter <<'EOF'
+#!/bin/sh
+in=$(cat)
+case "$*" in
+*tag_name*) echo "$in" | sed -n 's/.*"tag_name":"\([^"]*\)".*/\1/p' ;;
+*body*) echo "$in" | sed -n 's/.*"body":"\([^"]*\)".*/\1/p' ;;
+*browser_download_url*) echo "$in" | grep -o '"browser_download_url":"[^"]*"' | cut -d'"' -f4 ;;
+esac
+EOF
+cat > $T/bin/apk <<EOF
+#!/bin/sh
+case "\$1" in
+list) [ "\$3" = modem-sip ] && echo "modem-sip-0.3.0-r1 aarch64 {modem-sip} (GPL-2.0-only) [installed]"
+	[ "\$3" = aw1000-voice-sms ] && [ -e $T/voice-sms ] && echo "aw1000-voice-sms-1.0-r1 aarch64 {x} (GPL) [installed]" ;;
+add) shift; echo "\$@" > $T/apk.log; ls "\${@##* }" >/dev/null ;;
+esac
+exit 0
+EOF
+chmod +x $T/bin/*
+export UPD_DIR=$T/upd UPD_LOG=$T/upd.log
+out=$(rpc update_check "")
+echo "$out" | grep -q '"installed":"0.3.0-r1","latest":"0.3.1","notes":"Fixesasilentcall.","apk":true,"sms_clash":false,"busy":false' && ok "update check finds the new version" || bad "update check finds the new version ($out)"
+: > $T/voice-sms
+echo "$(rpc update_check "")" | grep -q '"sms_clash":true' && ok "update check warns about aw1000-voice-sms" || bad "update check warns about aw1000-voice-sms"
+rm -f $T/voice-sms
+out=$(rpc update_install "")
+i=0; while [ $i -lt 50 ] && ! grep -q 'Done\|failed' $UPD_LOG 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+[ "$out" = '{"result":true}' ] && tail -n 1 $UPD_LOG | grep -qx Done && [ ! -d $UPD_DIR ] &&
+	[ "$(tr ' ' '\n' < $T/apk.log | grep -c '\.apk$')" = 3 ] && ! grep -q ipk $T/apk.log && grep -q force-overwrite $T/apk.log &&
+	ok "update installs the three apks" || bad "update installs the three apks ($out, $(cat $UPD_LOG $T/apk.log))"
+mkdir $UPD_DIR && out=$(rpc update_install "") && rmdir $UPD_DIR
+[ "$out" = '{"result":false}' ] && ok "only one update at a time" || bad "only one update at a time ($out)"
 grep -qx "PAGE=admin/services/modem-sip" $F/info && ok "info names the page" || bad "info names the page"
 
 [ $fail = 0 ] && echo ALL_OK
