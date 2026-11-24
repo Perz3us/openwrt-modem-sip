@@ -11,6 +11,7 @@ SIP_VPN=${SIP_VPN:-/usr/libexec/fxs-sip-vpn}
 RELEASE=${RELEASE:-https://api.github.com/repos/Perz3us/openwrt-modem-sip/releases/latest}
 UPD_DIR=${UPD_DIR:-/tmp/modem-sip-update}
 UPD_LOG=${UPD_LOG:-/tmp/modem-sip-update.log}
+VOICE_SMS=${VOICE_SMS:-/etc/init.d/aw1000-voice-sms}
 
 result() {
 	json_init
@@ -170,7 +171,7 @@ update_check() {
 	json_add_string latest "$(echo "$rel" | jsonfilter -q -e '@.tag_name' | sed 's/^v//')"
 	json_add_string notes "$(echo "$rel" | jsonfilter -q -e '@.body')"
 	json_add_boolean apk "$(command -v apk >/dev/null && echo 1 || echo 0)"
-	json_add_boolean sms_clash "$([ -n "$(pkg_version aw1000-voice-sms)" ] && echo 1 || echo 0)"
+	json_add_boolean sms_clash "$([ -e "$VOICE_SMS" ] && echo 1 || echo 0)"
 	json_add_boolean busy "$([ -d "$UPD_DIR" ] && echo 1 || echo 0)"
 	json_add_string log "$(tail -n 15 "$UPD_LOG" 2>/dev/null)"
 	json_dump

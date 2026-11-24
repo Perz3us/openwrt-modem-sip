@@ -119,14 +119,13 @@ EOF
 cat > $T/bin/apk <<EOF
 #!/bin/sh
 case "\$1" in
-list) [ "\$3" = modem-sip ] && echo "modem-sip-0.3.0-r1 aarch64 {modem-sip} (GPL-2.0-only) [installed]"
-	[ "\$3" = aw1000-voice-sms ] && [ -e $T/voice-sms ] && echo "aw1000-voice-sms-1.0-r1 aarch64 {x} (GPL) [installed]" ;;
+list) [ "\$3" = modem-sip ] && echo "modem-sip-0.3.0-r1 aarch64 {modem-sip} (GPL-2.0-only) [installed]" ;;
 add) shift; echo "\$@" > $T/apk.log; ls "\${@##* }" >/dev/null ;;
 esac
 exit 0
 EOF
 chmod +x $T/bin/*
-export UPD_DIR=$T/upd UPD_LOG=$T/upd.log
+export UPD_DIR=$T/upd UPD_LOG=$T/upd.log VOICE_SMS=$T/voice-sms
 out=$(rpc update_check "")
 echo "$out" | grep -q '"installed":"0.3.0-r1","latest":"0.3.1","notes":"Fixesasilentcall.","apk":true,"sms_clash":false,"busy":false' && ok "update check finds the new version" || bad "update check finds the new version ($out)"
 : > $T/voice-sms
